@@ -19,8 +19,8 @@ async function getToken() {
 }
 
 async function saveTokens(access, refresh) {
-  await redisClient.set('ml_access_token', access);
-  await redisClient.set('ml_refresh_token', refresh);
+  await redisClient.set('ml_access_token', String(access));
+  await redisClient.set('ml_refresh_token', String(refresh));
 }
 
 app.get('/auth/login', (req, res) => {
