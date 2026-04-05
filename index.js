@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const redis = require('redis');
 
 const app = express();
 app.use(cors());
@@ -10,8 +11,17 @@ const ML_CLIENT_ID = process.env.ML_CLIENT_ID;
 const ML_CLIENT_SECRET = process.env.ML_CLIENT_SECRET;
 const ML_REDIRECT_URI = process.env.ML_REDIRECT_URI;
 
-let accessToken = null;
-let refreshToken = null;
+const redisClient = redis.createClient({ url: process.env.REDIS_URL });
+redisClient.connect().catch(console.error);
+
+async function getToken() {
+  return await redisClient.get('ml_access_token');
+}
+
+async function saveTokens(access, refresh) {
+  await redisClient.set('ml_access_token', access);
+  await redisClient.set('ml_refresh_token', refresh);
+}
 
 app.get('/auth/login', (req, res) => {
   const url = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${ML_CLIENT_ID}&redirect_uri=${ML_REDIRECT_URI}`;
@@ -28,8 +38,7 @@ app.get('/auth/callback', async (req, res) => {
       code,
       redirect_uri: ML_REDIRECT_URI
     });
-    accessToken = response.data.access_token;
-    refreshToken = response.data.refresh_token;
+    await saveTokens(response.data.access_token, response.data.refresh_token);
     res.send('<h2>Conectado con MercadoLibre. Ya podés cerrar esta pestaña.</h2>');
   } catch (err) {
     res.status(500).send('Error al obtener token: ' + err.message);
@@ -38,17 +47,19 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/productos', async (req, res) => {
   try {
+    const token = await getToken();
+    if (!token) return res.status(401).json({ error: 'No autenticado. Visitá /auth/login primero.' });
     const me = await axios.get('https://api.mercadolibre.com/users/me', {
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     const userId = me.data.id;
     const items = await axios.get(`https://api.mercadolibre.com/users/${userId}/items/search?limit=50`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     const ids = items.data.results;
     if (ids.length === 0) return res.json([]);
     const detalles = await axios.get(`https://api.mercadolibre.com/items?ids=${ids.join(',')}`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     const productos = detalles.data.map(d => ({
       id: d.body.id,
@@ -69,9 +80,10 @@ app.put('/productos/:id/stock', async (req, res) => {
   const { id } = req.params;
   const { cantidad } = req.body;
   try {
-    await axios.put(`https://api.mercadolibre.com/items/${id}`, 
+    const token = await getToken();
+    await axios.put(`https://api.mercadolibre.com/items/${id}`,
       { available_quantity: cantidad },
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     res.json({ ok: true });
   } catch (err) {
@@ -79,8 +91,9 @@ app.put('/productos/:id/stock', async (req, res) => {
   }
 });
 
-app.get('/status', (req, res) => {
-  res.json({ conectado: !!accessToken });
+app.get('/status', async (req, res) => {
+  const token = await getToken();
+  res.json({ conectado: !!token });
 });
 
 const PORT = process.env.PORT || 3000;
