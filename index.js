@@ -53,23 +53,33 @@ app.get('/productos', async (req, res) => {
       headers: { Authorization: `Bearer ${token}` }
     });
     const userId = me.data.id;
-    const items = await axios.get(`https://api.mercadolibre.com/users/${userId}/items/search?limit=50`, {
+    const items = await axios.get(`https://api.mercadolibre.com/users/${userId}/items/search?limit=50&status=active`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     const ids = items.data.results;
     if (ids.length === 0) return res.json([]);
-    const detalles = await axios.get(`https://api.mercadolibre.com/items?ids=${ids.join(',')}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const productos = detalles.data.map(d => ({
-      id: d.body.id,
-      nombre: d.body.title,
-      sku: d.body.seller_sku || '-',
-      stockML: d.body.available_quantity,
-      full: d.body.shipping?.logistic_type === 'fulfillment',
-      precio: d.body.price,
-      estado: d.body.status
-    }));
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 20) {
+      chunks.push(ids.slice(i, i + 20));
+    }
+    let productos = [];
+    for (const chunk of chunks) {
+      const detalles = await axios.get(`https://api.mercadolibre.com/items?ids=${chunk.join(',')}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parcial = detalles.data
+        .filter(d => d.code === 200)
+        .map(d => ({
+          id: d.body.id,
+          nombre: d.body.title,
+          sku: d.body.seller_sku || '-',
+          stockML: d.body.available_quantity,
+          full: d.body.shipping?.logistic_type === 'fulfillment',
+          precio: d.body.price,
+          estado: d.body.status
+        }));
+      productos = productos.concat(parcial);
+    }
     res.json(productos);
   } catch (err) {
     res.status(500).json({ error: err.message });
